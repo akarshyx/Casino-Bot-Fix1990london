@@ -51,10 +51,16 @@ import hashlib
 import secrets
 import threading
 import uuid
+from contextlib import contextmanager
 from io import BytesIO
 import qrcode
 import requests
 from blockchain_deposits import check_address_transactions, fetch_usd_rate
+from deposit_ledger import (
+    load_records as load_deposit_ledger_records,
+    upsert_deposit as upsert_deposit_ledger_record,
+    upsert_transaction as upsert_deposit_ledger_transaction,
+)
 from flask import Flask, request, jsonify
 from styled_buttons import primary_btn, success_btn, danger_btn, StyledInlineKeyboardButton
 import keno_game
@@ -1309,27 +1315,17 @@ def _tg_send_deposit_processing_notification(
             "usdttrc20": "USDT", "usdterc20": "USDT", "usdtbsc": "USDT",
             "usdtton": "USDT", "usdtsol": "USDT", "usdtmatic": "USDT",
             "usdcerc20": "USDC", "usdcbsc": "USDC",
+            "usdcsol": "USDC", "usdcmatic": "USDC",
+            "daierc20": "DAI", "daibsc": "DAI", "maticusdce": "DAI",
             "bnbbsc": "BNB", "avaxc": "AVAX", "maticbsc": "MATIC",
         }
         display_currency = display_map.get(
             str(currency or "").lower(), str(currency or "").upper()
         )
-        amount_lines = []
-        if float(coin_amount or 0) > 0:
-            amount_lines.append(
-                f"Amount detected: <b>{_format_coin_amount(coin_amount, display_currency)} "
-                f"{display_currency}</b>"
-            )
-        if float(usd_amount or 0) > 0:
-            amount_lines.append(f"USD value: <b>${float(usd_amount):.2f}</b>")
-        amount_block = ("\n" + "\n".join(amount_lines)) if amount_lines else ""
+        amount_text = _format_coin_amount(coin_amount, display_currency)
         processing_text = (
-            "<tg-emoji emoji-id=\"5386367538735104399\">🔄</tg-emoji> "
-            "<b>Processing payment...</b>\n\n"
-            f"We've detected your <b>{display_currency}</b> transaction.\n"
-            f"{amount_block}\n"
-            "Waiting for blockchain confirmations — this usually takes <b>1–3 minutes</b>.\n\n"
-            "<i>Your balance will be credited automatically once confirmed.</i>"
+            f"<tg-emoji emoji-id=\"5386367538735104399\">🔄</tg-emoji> "
+            f"<b>Processing payment Of {amount_text} {display_currency}.</b>"
         )
         response = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
@@ -1444,15 +1440,19 @@ def _tg_send_deposit_notification(user_id, usd_amount, currency, bonus_msg=None,
                     if fee_amount > 0 else "")
 
         # ── DM to player ──────────────────────────────────────────────────────
+        confirmation_amount = _format_coin_amount(coin_amount, display_symbol)
+        confirmation_txid = txid or "pending"
         dm_text = (
-            f"<tg-emoji emoji-id=\"5368324170671202286\">✅</tg-emoji> "
-            f"<b>Deposit Confirmed!</b>\n\n"
-            f"┌─────────────────────\n"
-            f"│ {coin_detail}\n"
-            f"│ 💵 <b>{value_label}:</b> ${usd_amount:.2f}\n"
-            f"{f'│ ✅ <b>Credited:</b> ${credited:.2f}{chr(10)}' if fee_amount > 0 else ''}"
-            f"│{txid_line.replace(chr(10), chr(10) + '│ ') if txid else ''}\n"
-            f"└─────────────────────\n\n"
+            "<tg-emoji emoji-id=\"6305056190036451310\">✅</tg-emoji> "
+            "<b>Deposit confirmed</b>\n\n"
+            f"<tg-emoji emoji-id=\"6235568867637207626\">💰</tg-emoji> "
+            f"<b>Currency:</b> {display_symbol}\n"
+            f"<tg-emoji emoji-id=\"6305518521791028899\">💵</tg-emoji> "
+            f"<b>Amount:</b> {confirmation_amount}\n"
+            f"<tg-emoji emoji-id=\"6305518521791028899\">💵</tg-emoji> "
+            f"<b>IN USD:</b> ${usd_amount:.2f}\n"
+            f"<tg-emoji emoji-id=\"6305442397790674704\">🔗</tg-emoji> "
+            f"<b>Txid:</b> <code>{confirmation_txid}</code>\n\n"
             f"💰 <b>New Balance:</b> <b>${new_balance:.2f}</b>"
         )
         if bonus_msg:
@@ -2151,6 +2151,16 @@ def _casino_asset_photo_source(asset_key: str):
     path = CASINO_UI_ASSETS.get(asset_key)
     return path if path and os.path.isfile(path) and os.path.getsize(path) > 0 else None
 
+@contextmanager
+def _casino_asset_photo(asset_key: str):
+    """Yield a Telegram-compatible file ID or an open local fallback file."""
+    source = _casino_asset_photo_source(asset_key)
+    if isinstance(source, str) and os.path.isfile(source):
+        with open(source, "rb") as photo:
+            yield photo
+    else:
+        yield source
+
 def _casino_asset_status_text() -> str:
     lines = ["🖼 <b>Casino UI Images</b>\n"]
     for key in _CASINO_ASSET_UPLOAD_KEYS:
@@ -2268,9 +2278,9 @@ async def crypto_deposit_start(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
         # The banner is optional.  Do not let a missing local asset break the
         # actual deposit flow or leave the Telegram callback spinning forever.
-        if os.path.isfile(DEPOSIT_BANNER_PATH):
+        if _casino_asset_photo_source("deposit"):
             try:
-                with open(DEPOSIT_BANNER_PATH, "rb") as img:
+                with _casino_asset_photo("deposit") as img:
                     await query.edit_message_media(
                         media=InputMediaPhoto(media=img),
                         reply_markup=coin_keyboard()
@@ -2295,9 +2305,9 @@ async def crypto_deposit_start(update: Update, context: ContextTypes.DEFAULT_TYP
                 parse_mode=ParseMode.HTML,
             )
     else:
-        if os.path.isfile(DEPOSIT_BANNER_PATH):
+        if _casino_asset_photo_source("deposit"):
             try:
-                with open(DEPOSIT_BANNER_PATH, "rb") as img:
+                with _casino_asset_photo("deposit") as img:
                     await update.message.reply_photo(
                         photo=img,
                         reply_markup=coin_keyboard()
@@ -4805,6 +4815,111 @@ def _normalise_payment_address(address) -> str:
     """Compare blockchain addresses safely while ignoring presentation casing."""
     return str(address or "").strip().casefold()
 
+def _canonical_deposit_identity(crypto: str, network: str = "", pay_currency: str = "") -> tuple[str, str]:
+    """Return a stable coin/network pair without relying on global UI state."""
+    raw = " ".join(
+        str(value or "").upper().replace("-", "_")
+        for value in (crypto, network, pay_currency)
+    )
+    compact = raw.replace(" ", "").replace("_", "")
+    if "USDT" in compact:
+        coin = "USDT"
+    elif "USDC" in compact:
+        coin = "USDC"
+    elif "DAI" in compact:
+        coin = "DAI"
+    elif "TRUMP" in compact:
+        coin = "TRUMP"
+    elif "BONK" in compact or "PEPE" in compact:
+        coin = "BONK"
+    elif "BCH" in compact:
+        coin = "BCH"
+    elif "DOGE" in compact:
+        coin = "DOGE"
+    elif "SHIB" in compact:
+        coin = "SHIB"
+    elif "POL" in compact or "MATIC" in compact:
+        coin = "POL"
+    elif "TRX" in compact or "TRON" in compact:
+        coin = "TRX"
+    elif "XMR" in compact or "MONERO" in compact:
+        coin = "XMR"
+    elif "BNB" in compact:
+        coin = "BNB"
+    elif "XRP" in compact:
+        coin = "XRP"
+    elif "TON" in compact or "GRAM" in compact:
+        coin = "TON"
+    elif "SOL" in compact:
+        coin = "SOL"
+    elif "LTC" in compact:
+        coin = "LTC"
+    elif "BTC" in compact or "BITCOIN" in compact:
+        coin = "BTC"
+    elif "ETH" in compact or "ETHEREUM" in compact:
+        coin = "ETH"
+    else:
+        coin = str(crypto or pay_currency or "").upper()
+
+    if "TRC20" in compact or "TRON" in compact:
+        chain = "TRC20"
+    elif "BEP20" in compact or "BSC" in compact:
+        chain = "BEP20"
+    elif "ERC20" in compact:
+        chain = "ERC20"
+    elif "SOL" in compact:
+        chain = "SOL"
+    elif "TON" in compact or "GRAM" in compact:
+        chain = "TON"
+    elif "POLYGON" in compact or "MATIC" in compact or "POL" in compact:
+        chain = "POLYGON"
+    elif "BASE" in compact:
+        chain = "BASE"
+    elif coin == "TRX":
+        chain = "TRON"
+    elif coin == "XRP":
+        chain = "XRPL"
+    elif coin in {"ETH", "USDT", "USDC", "DAI"}:
+        chain = "ETHEREUM"
+    else:
+        chain = coin
+    return coin, chain
+
+def _persist_pending_deposit_record(payment_id: str) -> None:
+    """Persist the full deposit record to the durable ledger and JSON snapshot."""
+    record = nowpayments_pending_deposits.get(str(payment_id))
+    if not isinstance(record, dict):
+        return
+    try:
+        record["updated_at"] = time.time()
+        upsert_deposit_ledger_record(record)
+    except Exception:
+        logger.exception("[DEPOSIT] durable ledger update failed payment=%s", payment_id)
+
+def _restore_deposit_ledger_state() -> None:
+    """Recover deposit records that survived outside the JSON snapshot."""
+    recovered = 0
+    try:
+        for record in load_deposit_ledger_records():
+            payment_id = str(record.get("payment_id") or "").strip()
+            if not payment_id:
+                continue
+            current = nowpayments_pending_deposits.get(payment_id)
+            if not isinstance(current, dict):
+                nowpayments_pending_deposits[payment_id] = record
+                recovered += 1
+                continue
+            # JSON is newer when it contains fields written after the ledger
+            # update; the ledger fills only missing identity/state fields.
+            for key, value in record.items():
+                if key not in current or current.get(key) in (None, "", {}):
+                    current[key] = value
+        if recovered:
+            logger.info("[DEPOSIT] Recovered %s record(s) from durable deposit ledger", recovered)
+            save_data_critical()
+    except Exception:
+        logger.exception("[DEPOSIT] Could not recover durable deposit ledger")
+
 def _track_nowpayments_pending_deposit(
     payment_data: dict,
     user_id: str,
@@ -4835,20 +4950,31 @@ def _track_nowpayments_pending_deposit(
 
     created = float(created_at if created_at is not None else time.time())
     existing = nowpayments_pending_deposits.get(payment_id, {})
+    provider_currency = str(
+        payment_data.get("pay_currency")
+        or crypto
+        or existing.get("pay_currency")
+        or ""
+    ).lower()
+    canonical_coin, canonical_network = _canonical_deposit_identity(
+        crypto,
+        network,
+        provider_currency,
+    )
     nowpayments_pending_deposits[payment_id] = {
         **existing,
         "user_id": str(user_id),
         "username": username or existing.get("username", ""),
-        "crypto": str(crypto or existing.get("crypto", "")).lower(),
-        "coin": str(existing.get("coin") or crypto or "").upper(),
-        "network": str(network or existing.get("network") or "").upper(),
+        "crypto": provider_currency,
+        "coin": canonical_coin,
+        "network": canonical_network,
         "order_id": str(
             payment_data.get("order_id") or order_id or existing.get("order_id", "")
         ),
         "payment_id": payment_id,
         "pay_address": pay_address,
         "deposit_address": pay_address,
-        "pay_currency": str(crypto or existing.get("pay_currency") or "").upper(),
+        "pay_currency": provider_currency.upper(),
         "amount_usd": float(payment_data.get("price_amount") or existing.get("amount_usd") or 0),
         "created_at": float(existing.get("created_at") or created),
         "expires_at": float(existing.get("expires_at") or (created + EXP_SECONDS)),
@@ -4860,6 +4986,7 @@ def _track_nowpayments_pending_deposit(
         "transactions": existing.get("transactions", {}),
         "detector_state": existing.get("detector_state", {}),
     }
+    _persist_pending_deposit_record(payment_id)
     save_data()
     logger.info(
         "[TRACKING] Registered active NOWPayments deposit "
@@ -5263,12 +5390,11 @@ async def _monitor_direct_blockchain_deposits() -> int:
         if not isinstance(dep, dict):
             continue
         pid = str(payment_id or dep.get("payment_id") or "").strip()
-        if not pid or dep.get("status") == "credited":
+        if not pid:
             continue
-        if pid in processed_payment_ids:
-            dep["status"] = "credited"
-            changed = True
-            continue
+        # Do not skip a credited address: a single generated address can
+        # receive more than one transaction. Each transaction has its own
+        # persisted record and idempotency key.
         expires_at = _safe_float(dep.get("expires_at"), 0)
         if expires_at and now >= expires_at:
             if dep.get("status") not in {"expired", "credited"}:
@@ -5310,6 +5436,14 @@ async def _monitor_direct_blockchain_deposits() -> int:
             if not isinstance(txs, dict):
                 dep["transactions"] = txs = {}
             txs[txid] = tx_record
+            try:
+                upsert_deposit_ledger_transaction(pid, dep, tx_record)
+            except Exception:
+                logger.exception(
+                    "[CHAIN] Could not persist transaction payment=%s tx=%s",
+                    pid,
+                    txid,
+                )
             if not dep.get("detected_at"):
                 dep["detected_at"] = now
                 dep["status"] = "confirming"
@@ -5319,17 +5453,26 @@ async def _monitor_direct_blockchain_deposits() -> int:
                     "confirmations=%s",
                     pid, txid, confirmations,
                 )
+            currency = str(
+                dep.get("crypto") or dep.get("coin") or dep.get("pay_currency") or ""
+            ).upper()
+            # Calculate the live value at first detection so the processing
+            # message contains the same actual coin amount and USD value used
+            # for settlement later.
+            rate = await asyncio.to_thread(fetch_usd_rate, currency)
+            detected_usd = round(coin_amount * float(rate or 0), 2)
             if not dep.get("processing_notified_at"):
                 processing_sent = await asyncio.to_thread(
                     _tg_send_deposit_processing_notification,
                     user_id,
-                    str(dep.get("crypto") or dep.get("coin") or ""),
+                    currency,
                     coin_amount,
-                    0.0,
+                    detected_usd,
                 )
                 if processing_sent:
                     dep["processing_notified_at"] = time.time()
                     changed = True
+            _persist_pending_deposit_record(pid)
             if (
                 confirmations < required
                 or tx_record.get("settled_at")
@@ -5340,10 +5483,6 @@ async def _monitor_direct_blockchain_deposits() -> int:
                     changed = True
                 continue
 
-            currency = str(
-                dep.get("crypto") or dep.get("coin") or dep.get("pay_currency") or ""
-            ).upper()
-            rate = await asyncio.to_thread(fetch_usd_rate, currency)
             usd_amount = round(coin_amount * float(rate or 0), 2)
             if usd_amount <= 0:
                 logger.warning(
@@ -8244,7 +8383,15 @@ def _process_confirmed_deposit(
         # This is the only authoritative duplicate check.  Webhooks, polling,
         # manual recovery, and internal deposits all enter through this gate.
         with _processed_payments_lock:
-            if payment_id and payment_id in processed_payment_ids:
+            # A provider payment normally represents one transfer, but a
+            # static/generated address can receive more than one on-chain
+            # transaction.  Payment-level idempotency still protects webhook
+            # replays; a new transaction ID on the same address is legitimate.
+            if (
+                payment_id
+                and payment_id in processed_payment_ids
+                and (not txid or txid in processed_deposit_txids)
+            ):
                 logger.info("[DEPOSIT] payment=%s already credited — skipping", payment_id)
                 return True
             if txid and txid in processed_deposit_txids:
@@ -8394,6 +8541,22 @@ def _process_confirmed_deposit(
             deposit_record['coin_amount'] = coin_amount
             deposit_record['pay_currency'] = pay_currency
             deposit_record['txid'] = txid
+            if txid:
+                transactions = deposit_record.setdefault("transactions", {})
+                tx_record = transactions.setdefault(txid, {})
+                tx_record.update({
+                    "txid": txid,
+                    "coin_amount": coin_amount,
+                    "usd_amount": usd_amount,
+                    "fee_amount": fee_amount,
+                    "confirmations": max(
+                        int(tx_record.get("confirmations") or 0),
+                        int(deposit_record.get("confirmation_count") or 0),
+                    ),
+                    "status": "settled",
+                    "settled_at": time.time(),
+                })
+            _persist_pending_deposit_record(payment_id)
             logger.info(f"[DEPOSIT] Marked nowpayments_pending_deposits[{payment_id}] = credited")
 
         # 9. Activate any pending bonus claim for this user
@@ -8754,9 +8917,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply_markup = _main_menu_keyboard(user_id)
 
     welcome_caption = _main_menu_caption(user_id)
-    if os.path.isfile(WELCOME_BANNER_PATH):
+    if _casino_asset_photo_source("menu"):
         try:
-            with open(WELCOME_BANNER_PATH, "rb") as photo:
+            with _casino_asset_photo("menu") as photo:
                 await update.message.reply_photo(
                     photo=photo,
                     caption=welcome_caption,
@@ -12839,9 +13002,9 @@ async def crypto_bonus_command(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     uid = str(update.message.from_user.id)
     text, markup = _crypto_bonus_panel(uid)
-    if os.path.isfile(_CRYPTO_BONUS_BANNER_PATH):
+    if _casino_asset_photo_source("crypto_bonus"):
         try:
-            with open(_CRYPTO_BONUS_BANNER_PATH, "rb") as photo:
+            with _casino_asset_photo("crypto_bonus") as photo:
                 await update.message.reply_photo(
                     photo=photo,
                     caption=text,
@@ -12936,9 +13099,9 @@ async def _send_bonus_menu(target, context, is_callback: bool = False) -> None:
     # Back from a bonus sub-screen should restore the banner itself.  Editing
     # the callback message to media removes the large text panel entirely.
     if is_callback:
-        if os.path.isfile(_BONUS_BANNER_PATH):
+        if _casino_asset_photo_source("bonus"):
             try:
-                with open(_BONUS_BANNER_PATH, "rb") as photo:
+                with _casino_asset_photo("bonus") as photo:
                     await target.message.edit_media(
                         media=InputMediaPhoto(media=photo),
                         reply_markup=markup,
@@ -12958,9 +13121,9 @@ async def _send_bonus_menu(target, context, is_callback: bool = False) -> None:
             logger.warning("[BONUS] Could not restore text menu on Back: %s", exc)
         return
 
-    if os.path.isfile(_BONUS_BANNER_PATH):
+    if _casino_asset_photo_source("bonus"):
         try:
-            with open(_BONUS_BANNER_PATH, "rb") as photo:
+            with _casino_asset_photo("bonus") as photo:
                 await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=photo,
@@ -14127,6 +14290,7 @@ async def handle_np_withdrawal_amount(update: Update, context: ContextTypes.DEFA
                     + _wager_line,
                     parse_mode=ParseMode.HTML
                 )
+                _persist_pending_deposit_record(pid)
             else:
                 await update.message.reply_text(f"❌ {reason}")
             return
@@ -14335,6 +14499,14 @@ async def handle_np_withdrawal_address(update: Update, context: ContextTypes.DEF
                     "Bonus or promotional balances may require wagering before withdrawal."
                     + _wl2,
                     parse_mode=ParseMode.HTML
+                )
+            try:
+                upsert_deposit_ledger_transaction(pid, dep, tx_record)
+            except Exception:
+                logger.exception(
+                    "[CHAIN] Could not persist transaction settlement payment=%s tx=%s",
+                    pid,
+                    txid,
                 )
             else:
                 await update.message.reply_text(f"❌ {reason}")
@@ -16398,7 +16570,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
     try:
-        with open(_DR_PROFILE_PHOTO_PATH, "rb") as photo_f:
+        with _casino_asset_photo("profile") as photo_f:
             await update.message.reply_photo(
                 photo       = photo_f,
                 caption     = caption,
@@ -23037,7 +23209,6 @@ async def auto_player_roll_and_process(context, user_id: str, chat_id: int) -> N
         return
     game_data = active_games[user_id]
     session_id, generation = _ensure_animated_session(game_data)
-    session_id, generation = _ensure_animated_session(game_data)
     game_data['last_active'] = time.time()
     if game_data.get('state') != EmojiGameState.WAITING_PLAYER_ROLL:
         return
@@ -23243,7 +23414,13 @@ async def handle_bot_roll_turn_by_id(
     game_data['bot_round_rolls'] = 0
 
     try:
-        values = await _send_bot_dice_values(context, game_data, user_id)
+        values = await _send_bot_dice_values(
+            context,
+            game_data,
+            user_id,
+            session_id=session_id,
+            generation=generation,
+        )
         if not _animated_game_is_current(user_id, game_data, session_id, generation):
             logger.info("[BOT_ROLL_BY_ID] stale roll discarded for user=%s", user_id)
             return
@@ -29434,9 +29611,9 @@ async def show_main_menu(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply_markup = _main_menu_keyboard(user_id)
 
     welcome_caption = _main_menu_caption(user_id)
-    if os.path.isfile(WELCOME_BANNER_PATH):
+    if _casino_asset_photo_source("menu"):
         try:
-            with open(WELCOME_BANNER_PATH, "rb") as photo:
+            with _casino_asset_photo("menu") as photo:
                 await query.edit_message_media(
                     media=InputMediaPhoto(
                         media=photo,
@@ -29453,7 +29630,7 @@ async def show_main_menu(query, context: ContextTypes.DEFAULT_TYPE) -> None:
             except Exception:
                 pass
         try:
-            with open(WELCOME_BANNER_PATH, "rb") as photo:
+            with _casino_asset_photo("menu") as photo:
                 await context.bot.send_photo(
                     chat_id=query.message.chat_id,
                     photo=photo,
@@ -36187,7 +36364,12 @@ async def handle_dice_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     # finishing.  Waiting on this lock preserves Telegram's update order.
     async with roll_lock:
         try:
-            await _handle_dice_message_locked(update, context)
+            await _handle_dice_message_locked(
+                update,
+                context,
+                expected_session_id=session_id,
+                expected_generation=generation,
+            )
         except Exception:
             # A Telegram API hiccup or an unexpected handler error must not
             # leave a game permanently locked in a half-finished round.
@@ -36233,7 +36415,12 @@ async def handle_dice_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
 
 
-async def _handle_dice_message_locked(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _handle_dice_message_locked(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    expected_session_id: str | None = None,
+    expected_generation: int | None = None,
+) -> None:
     """Handle one dice update while that user's game state is locked."""
     if not update.message or not update.message.from_user or not update.message.dice:
         return
@@ -36245,6 +36432,13 @@ async def _handle_dice_message_locked(update: Update, context: ContextTypes.DEFA
 
     user_id = str(update.message.from_user.id)
     dice_value = update.message.dice.value
+    if expected_session_id is not None and expected_generation is not None:
+        current_game = active_games.get(user_id)
+        if not isinstance(current_game, dict) or not _animated_game_is_current(
+            user_id, current_game, expected_session_id, expected_generation
+        ):
+            logger.info("[DICE] stale locked update discarded for user=%s", user_id)
+            return
 
     # ── Stale session guard ──────────────────────────────────────────────
     # Any active_games entry older than STALE_GAME_TIMEOUT_SECS is treated as
@@ -36396,7 +36590,15 @@ async def _handle_dice_message_locked(update: Update, context: ContextTypes.DEFA
 
     # ── PvP games: two human players rolling against each other ──────────────
     if game_type == 'sports_pvp':
-        await handle_pvp_dice_game(update, context, user_id, username, game_data)
+        await handle_pvp_dice_game(
+            update,
+            context,
+            user_id,
+            username,
+            game_data,
+            session_id=expected_session_id,
+            generation=expected_generation,
+        )
         return
 
     # ── Sports games: route directly — handle_sports_dice_game owns ALL accumulation ──
@@ -36534,8 +36736,22 @@ async def start_emoji_game_from_setup(update: Update, context: ContextTypes.DEFA
     _schedule_bot_roll_turn(context, user_id, update.message.chat_id)
     return
 
-async def handle_pvp_dice_game(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, username: str, game_data: dict) -> None:
+async def handle_pvp_dice_game(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: str,
+    username: str,
+    game_data: dict,
+    session_id: str | None = None,
+    generation: int | None = None,
+) -> None:
     """Handle PvP animated dice game between two human players."""
+    current_session, current_generation = _ensure_animated_session(game_data)
+    session_id = session_id or current_session
+    generation = current_generation if generation is None else generation
+    if not _animated_game_is_current(user_id, game_data, session_id, generation):
+        logger.info("[PVP] stale roll discarded for user=%s", user_id)
+        return
     chat_id       = game_data.get('chat_id') or update.message.chat_id
     emoji         = game_data.get('emoji', '🎲')
     dice_emoji_str = game_data.get('dice_emoji', '🎲')
@@ -43063,6 +43279,7 @@ def main():
     ))
     
     load_data()
+    _restore_deposit_ledger_state()
     _keno_recovered = keno_game.recover_incomplete_sessions()
     if _keno_recovered:
         logger.warning("[KENO] Recovered %s interrupted round(s) with a one-time refund", _keno_recovered)

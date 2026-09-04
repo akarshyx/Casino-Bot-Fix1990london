@@ -63,10 +63,14 @@ EVM_NETWORKS = {
 EVM_TOKENS = {
     # Addresses are public contract addresses, not credentials.
     "ETH_USDT": ("0xdac17f958d2ee523a2206206994597c13d831ec7", 6),
+    "ETH_USDC": ("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", 6),
+    "ETH_DAI": ("0x6b175474e89094c44da98b954eedeac495271d0f", 18),
     "BSC_USDT": ("0x55d398326f99059ff775485246999027b3197955", 18),
     "BSC_USDC": ("0x8ac76a51cc95059d2da68b83fe1ad97b32cd580d", 18),
+    "BSC_DAI": ("0x1af3f329e8be154074d8769d1ffa4ee058b1dbc3", 18),
     "POLYGON_USDT": ("0xc2132d05d31c914a87c6611c10748aeb04b58e8f", 6),
     "POLYGON_USDC": ("0x2791bca1f2de4661ed88a30c99a7a9449aa84174", 6),
+    "POLYGON_DAI": ("0x8f3cf7ad23cd3cadbd9735aff958023239c6a063", 18),
     "BASE_USDC": ("0x833589fcd6edb6e08f4c7c32d4f71b54bd a02913".replace(" ", ""), 6),
 }
 
@@ -114,10 +118,20 @@ def _network_for(dep: dict[str, Any]) -> str:
     ).upper()
     if "BEP20" in raw or "BSC" in raw or raw.endswith("BUSD"):
         return "BSC"
+    if "TRC20" in raw or "TRON" in raw or raw.startswith("TRX"):
+        return "TRON"
     if "POLYGON" in raw or "MATIC" in raw or "POL" in raw:
         return "POLYGON"
     if "BASE" in raw:
         return "BASE"
+    if "SOL" in raw:
+        return "SOLANA"
+    if "TON" in raw or "GRAM" in raw:
+        return "TON"
+    if "XRP" in raw or "XRPL" in raw:
+        return "XRPL"
+    if "BNB" in raw:
+        return "BSC"
     if "ERC20" in raw or raw in {"ETH", "ETHEREUM"}:
         return "ETH"
     return str(dep.get("network") or "").upper()
@@ -165,7 +179,12 @@ def _hex_int(value: Any) -> int:
 
 
 def _evm_token_key(network: str, currency: str) -> str | None:
-    base = "USDT" if "USDT" in currency else "USDC" if "USDC" in currency else None
+    base = (
+        "USDT" if "USDT" in currency
+        else "USDC" if "USDC" in currency
+        else "DAI" if "DAI" in currency
+        else None
+    )
     if not base:
         return None
     return f"{network}_{base}"
@@ -325,6 +344,9 @@ def _solana_rpc_observations(dep: dict[str, Any]) -> list[dict[str, Any]]:
     if not address:
         return []
     rpc = os.getenv("SOLANA_RPC_URL", "").strip() or "https://api.mainnet-beta.solana.com"
+    currency = _currency_for(dep)
+    if "USDT" in currency or "USDC" in currency:
+        return _solana_token_observations(dep, rpc, currency)
     signatures = _post(rpc, {
         "jsonrpc": "2.0", "id": 1, "method": "getSignaturesForAddress",
         "params": [address, {"limit": 50}],
@@ -360,6 +382,204 @@ def _solana_rpc_observations(dep: dict[str, Any]) -> list[dict[str, Any]]:
                 currency="SOL", raw=tx,
             ))
     return _merge_observations(results)
+
+
+SOLANA_TOKEN_MINTS = {
+    "USDT": "Es9vMFrzaCERmJfrF4H2FYD4zYxT4nW9jYyQhN7z8w3",
+    "USDC": "EPjFWdd5AufqSSqeM2qY6L6jT6mQ9vJmM7n5QxY6p8r",
+}
+
+
+def _solana_token_observations(
+    dep: dict[str, Any], rpc: str, currency: str
+) -> list[dict[str, Any]]:
+    """Read SPL-token transfers from the exact token accounts owned by the address."""
+    owner = _address(dep)
+    mint = next((value for key, value in SOLANA_TOKEN_MINTS.items() if key in currency), "")
+    if not owner or not mint:
+        return []
+    accounts = _post(rpc, {
+        "jsonrpc": "2.0", "id": 1, "method": "getTokenAccountsByOwner",
+        "params": [owner, {"mint": mint}, {"encoding": "jsonParsed"}],
+    })
+    account_rows = (accounts or {}).get("result", {}).get("value", []) or []
+    if not account_rows:
+        return []
+    slot_body = _post(rpc, {
+        "jsonrpc": "2.0", "id": 2, "method": "getSlot",
+        "params": [{"commitment": "finalized"}],
+    })
+    latest_slot = int((slot_body or {}).get("result") or 0)
+    results: list[dict[str, Any]] = []
+    for account_row in account_rows:
+        token_account = str(account_row.get("pubkey") or "")
+        if not token_account:
+            continue
+        signatures = _post(rpc, {
+            "jsonrpc": "2.0", "id": 3, "method": "getSignaturesForAddress",
+            "params": [token_account, {"limit": 50, "commitment": "finalized"}],
+        })
+        for item in (signatures or {}).get("result", []) or []:
+            if not isinstance(item, dict) or item.get("err") is not None:
+                continue
+            signature = str(item.get("signature") or "")
+            tx_body = _post(rpc, {
+                "jsonrpc": "2.0", "id": 4, "method": "getTransaction",
+                "params": [
+                    signature,
+                    {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0},
+                ],
+            })
+            tx = (tx_body or {}).get("result") or {}
+            meta = tx.get("meta") or {}
+            keys = [
+                (key.get("pubkey") if isinstance(key, dict) else key)
+                for key in ((tx.get("transaction") or {}).get("message") or {}).get(
+                    "accountKeys", []
+                )
+            ]
+            try:
+                account_index = keys.index(token_account)
+            except ValueError:
+                continue
+            def token_value(rows: list[Any]) -> float:
+                for row in rows or []:
+                    if (
+                        isinstance(row, dict)
+                        and row.get("accountIndex") == account_index
+                        and str(row.get("mint") or "") == mint
+                    ):
+                        ui = row.get("uiTokenAmount") or {}
+                        try:
+                            return float(ui.get("uiAmountString") or ui.get("uiAmount") or 0)
+                        except (TypeError, ValueError):
+                            return 0.0
+                return 0.0
+            amount = token_value(meta.get("postTokenBalances", [])) - token_value(
+                meta.get("preTokenBalances", [])
+            )
+            slot = int(tx.get("slot") or item.get("slot") or 0)
+            confirmations = max(0, latest_slot - slot + 1) if slot else 0
+            if amount > 0 and signature:
+                results.append(_observation(
+                    signature, amount, confirmations, block=slot or None,
+                    source="solana_spl_rpc", currency=currency, raw=tx,
+                ))
+    return _merge_observations(results)
+
+
+def _tron_observations(dep: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read native TRX or TRC20 transfers addressed to the saved account."""
+    address = _address(dep)
+    if not address:
+        return []
+    base = os.getenv("TRON_API_BASE", "https://api.trongrid.io").rstrip("/")
+    headers = {}
+    api_key = os.getenv("TRONGRID_API_KEY", "").strip()
+    if api_key:
+        headers["TRON-PRO-API-KEY"] = api_key
+    currency = _currency_for(dep)
+    is_token = "TRC20" in currency or "USDT" in currency
+    try:
+        if is_token:
+            body = _get(
+                f"{base}/v1/accounts/{address}/transactions/trc20",
+                params={"only_to": "true", "limit": 200},
+                headers=headers,
+            ).json()
+        else:
+            body = _get(
+                f"{base}/v1/accounts/{address}/transactions",
+                params={"only_to": "true", "limit": 200, "order_by": "block_timestamp,asc"},
+                headers=headers,
+            ).json()
+        latest = _get(f"{base}/wallet/getnowblock", headers=headers).json()
+        latest_number = int(
+            ((latest.get("block_header") or {}).get("raw_data") or {}).get("number") or 0
+        )
+    except (requests.RequestException, ValueError, TypeError):
+        return []
+    rows = body.get("data", []) if isinstance(body, dict) else []
+    results: list[dict[str, Any]] = []
+    usdt_contract = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t".lower()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        txid = str(row.get("transaction_id") or row.get("txID") or "")
+        if not txid:
+            continue
+        amount = 0.0
+        block = int(row.get("block_number") or row.get("blockNumber") or 0)
+        if is_token:
+            token_info = row.get("token_info") or {}
+            contract = str(token_info.get("address") or "").lower()
+            if "USDT" in currency and contract and contract != usdt_contract:
+                continue
+            if str(row.get("to") or "") != address:
+                continue
+            try:
+                decimals = int(token_info.get("decimals") or 6)
+                amount = float(row.get("value") or 0) / (10 ** decimals)
+            except (TypeError, ValueError):
+                amount = 0.0
+        else:
+            if str(row.get("to") or "") not in {"", address}:
+                continue
+            contracts = row.get("raw_data", {}).get("contract", [])
+            value = ((contracts[0] if contracts else {}).get("parameter") or {}).get("value", {})
+            try:
+                amount = float(value.get("amount") or 0) / 1_000_000
+            except (TypeError, ValueError):
+                amount = 0.0
+        confirmations = max(0, latest_number - block + 1) if block else 0
+        if amount > 0:
+            results.append(_observation(
+                txid, amount, confirmations, block=block or None,
+                source="trongrid_trc20" if is_token else "trongrid_trx",
+                currency=currency, raw=row,
+            ))
+    return _merge_observations(results)
+
+
+def _xrp_observations(dep: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read validated native XRP payments from the public XRPL RPC."""
+    address = _address(dep)
+    if not address:
+        return []
+    body = _post("https://xrplcluster.com", {
+        "method": "account_tx",
+        "params": [{
+            "account": address,
+            "ledger_index": -1,
+            "binary": False,
+            "forward": False,
+            "limit": 100,
+        }],
+    })
+    result = (body or {}).get("result") or {}
+    validated_ledger = int(result.get("validated_ledgers", "0-0").split("-")[-1] or 0)
+    observations: list[dict[str, Any]] = []
+    for item in result.get("transactions", []) or []:
+        tx = item.get("tx") if isinstance(item, dict) and isinstance(item.get("tx"), dict) else item
+        if not isinstance(tx, dict) or item.get("validated") is False:
+            continue
+        if tx.get("TransactionType") != "Payment" or tx.get("Destination") != address:
+            continue
+        amount = tx.get("Amount")
+        if not isinstance(amount, str):
+            continue
+        try:
+            value = float(amount) / 1_000_000
+        except (TypeError, ValueError):
+            continue
+        ledger = int(item.get("ledger_index") or tx.get("ledger_index") or 0)
+        txid = str(tx.get("hash") or "")
+        if txid and value > 0:
+            observations.append(_observation(
+                txid, value, max(0, validated_ledger - ledger + 1),
+                block=ledger or None, source="xrpl_account_tx", currency="XRP", raw=item,
+            ))
+    return _merge_observations(observations)
 
 
 def _walk_solana_instructions(instructions: list[Any], meta: dict[str, Any]) -> list[dict[str, Any]]:
@@ -460,10 +680,15 @@ def check_address_transactions(dep: dict[str, Any]) -> list[dict[str, Any]]:
     currency = _currency_for(dep)
     if currency in {"BTC", "BITCOIN", "LTC", "LITECOIN"}:
         return _utxo_observations(dep)
+    network = _network_for(dep)
+    if currency == "XRP" or network == "XRPL":
+        return _xrp_observations(dep)
+    if currency == "TRX" or "TRC20" in currency or network == "TRON":
+        return _tron_observations(dep)
     if currency == "SOL" or "SOL" in str(dep.get("network", "")).upper():
         return _solana_rpc_observations(dep)
     if currency == "TON" or "TON" in str(dep.get("network", "")).upper():
         return _ton_observations(dep)
-    if _network_for(dep) in EVM_NETWORKS:
+    if network in EVM_NETWORKS:
         return _evm_rpc_observations(dep)
     return []

@@ -54,6 +54,14 @@ KENO_PAYOUTS: dict[int, float] = {
     9: 30.0,
     10: 100.0,
 }
+
+@dataclass(frozen=True)
+class KenoMode:
+    """Compatibility descriptor for persisted/UI callers of the old mode API."""
+
+    target_rtp: float
+
+
 KENO_CONFIG: dict[str, Any] = {
     "number_count": KENO_NUMBERS,
     "draw_count": KENO_DRAW_COUNT,
@@ -62,6 +70,7 @@ KENO_CONFIG: dict[str, Any] = {
     "reveal_delay_seconds": 0.65,
     "maximum_payout_multiplier": max(KENO_PAYOUTS.values()),
     "payouts": KENO_PAYOUTS,
+    "modes": {"easy": KenoMode(target_rtp=0.79)},
 }
 
 
@@ -477,6 +486,8 @@ def _render_result(session: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
     balance = float(service.get_balance(user_id))
     session_id = session["session_id"]
     outcome_label = "WIN" if payout > 0 else "NO WIN"
+    mode_label = str(session.get("mode") or "").strip().upper()
+    outcome_heading = f"OUTCOME ({mode_label})" if mode_label else "OUTCOME"
     board = _render_number_grid(session)
     board.extend(
         [
@@ -500,7 +511,7 @@ def _render_result(session: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
     )
     return (
         "🎯 <b>KENO</b>\n\n"
-        "<b>OUTCOME</b>\n"
+        f"<b>{outcome_heading}</b>\n"
         "<blockquote>"
         f"<b>Bet:</b> {service.format_balance(bet_amount, currency)}\n"
         f"<b>Hits:</b> {hits}/{spots}\n"

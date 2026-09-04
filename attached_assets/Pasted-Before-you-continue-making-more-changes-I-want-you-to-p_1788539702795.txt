@@ -1,0 +1,103 @@
+Before you continue making more changes, I want you to properly verify the entire deposit system and explain to me exactly how it currently works.
+
+DEPOSIT VERIFICATION — DO THIS FIRST
+
+Please inspect the complete deposit code and trace the real flow from beginning to end:
+
+/deposit → coin selection → NOWPayments address + QR generation → address saved → user/address mapping → blockchain monitoring → transaction detection → confirmation tracking → balance credit → processing message → confirmation message.
+
+I want you to confirm which parts are actually working right now and which parts are not.
+
+Do not assume something works just because the code exists.
+
+Check my actual deposit flow
+
+Use my current implementation and verify:
+
+1. When I select a coin, is the correct coin saved?
+2. Is the exact generated address saved permanently?
+3. Is that address permanently linked to the correct Telegram user?
+4. After the address is generated, what exactly does the bot use to monitor that address?
+5. Which blockchain/API/explorer is being used for each coin?
+6. How does the bot detect a new transaction?
+7. How does it know that the transaction belongs to a specific user?
+8. How does it track confirmations?
+9. At what point does it credit the user’s balance?
+10. How does it prevent the same TXID from being credited twice?
+11. What happens if the bot restarts while a deposit is pending?
+12. What happens if the blockchain/API temporarily fails?
+13. What happens if multiple users deposit at the same time?
+14. How is the USD value calculated?
+15. How does the bot ensure the USD rate belongs to the correct selected coin?
+
+IMPORTANT
+
+I want you to explain the actual current implementation to me clearly before claiming the deposit system is finished.
+
+For example, explain it like:
+
+User selects GRAM → NOWPayments generates GRAM address → address is stored with User ID X → bot monitors that specific GRAM address using ___ → transaction TXID ___ is detected → bot verifies amount/coin/address → waits for ___ confirmations → credits User X → marks TXID as processed.
+
+Do the same explanation for the actual code/architecture you find.
+
+FIND THE BUGS
+
+While tracing the flow, actively look for bugs and race conditions.
+
+Especially check for:
+
+* wrong coin credited
+* wrong user credited
+* wrong address matched
+* transactions missed
+* duplicate credits
+* duplicate processing messages
+* confirmation never completing
+* confirmation happening incorrectly
+* deposits stuck forever
+* pending deposits lost after restart
+* expired addresses causing incorrect matching
+* multiple deposits to the same address
+* simultaneous deposits
+* stale in-memory variables
+* global currency variables
+* incorrect USD conversion
+* blockchain/API timeout handling
+* polling/background task failures
+* database race conditions
+* bot restart/redeployment issues
+
+DO NOT CHANGE ADDRESS GENERATION
+
+The existing NOWPayments address + QR generation is working.
+
+Do NOT rebuild or modify that part unless your investigation proves there is an actual bug directly affecting the saved address.
+
+The main problem I need solved is:
+
+After an address is generated, the bot must reliably remember and monitor that exact address and correctly identify, confirm and credit every transaction belonging to it.
+
+PROCESSING & CONFIRMATION MESSAGES
+
+I have attached screenshots showing how the Processing Payment and Deposit Confirmation messages should look.
+
+Use those screenshots as the exact source of truth.
+
+Do not invent or redesign those messages.
+
+FINAL CHECK
+
+After inspecting everything, tell me:
+
+1. How the current deposit system works
+2. Which blockchain/API is monitoring each coin
+3. How the bot maps address → user
+4. How confirmations are detected
+5. How balance crediting works
+6. What bugs you found
+7. What you changed to fix them
+8. What still needs testing
+
+Then actually test the complete flow and fix every bug you find.
+
+Do not just give me a code analysis. I need the working deposit system, and I need you to verify that it cannot randomly lose, misidentify, or double-credit deposits.
