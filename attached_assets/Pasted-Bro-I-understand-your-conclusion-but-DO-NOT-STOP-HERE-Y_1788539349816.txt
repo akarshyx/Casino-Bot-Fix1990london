@@ -1,0 +1,108 @@
+Bro, I understand your conclusion, but DO NOT STOP HERE.
+
+You have identified that all 3 systems are only partially complete. I need you to continue working and actually finish the implementation, not just report the problems.
+
+Do not give me another analysis saying something is “partial”, “substantially implemented”, or “not fully verified.” Fix the remaining issues now.
+
+1. CRYPTO DEPOSITS
+
+Finish the entire deposit tracking system.
+
+NOWPayments address + QR generation is already working, so do not rebuild or change that part.
+
+Complete everything after address generation:
+
+Generated address → permanently associate USER + COIN + NETWORK + ADDRESS → monitor the correct blockchain → detect transaction → identify exact user → processing message → confirmation tracking → credit exact balance → confirmation message.
+
+Use the attached Processing Payment and Deposit Confirmation screenshots as the exact reference for those messages. Do not invent or redesign them.
+
+Fix:
+
+* wrong coin being credited
+* wrong user being credited
+* wrong USD conversion
+* duplicate transaction credits
+* missed transactions
+* deposits lost after restart
+* pending deposits not recovering
+* confirmation tracking failures
+* simultaneous deposits interfering with each other
+
+Every deposit must have a persistent database record.
+
+The system must be idempotent and restart-safe.
+
+2. ANIMATED GAMES
+
+You said the games are substantially implemented but not fully verified.
+
+Now fully verify and fix them.
+
+Do not change existing game text, buttons, scoring rules, UI or gameplay.
+
+Fix the actual problems with:
+
+* animation delivery
+* async handling
+* rapid taps
+* duplicate rolls
+* duplicate messages
+* frozen games
+* stuck turns
+* stuck rounds
+* stale tasks
+* race conditions
+* Telegram failures/timeouts
+* task cleanup
+
+Rapid tapping must NEVER permanently break a game.
+
+Only one legitimate roll/action can process at a time. Extra taps should be safely ignored/debounced without creating repeated warning messages.
+
+The flow must remain:
+
+Animation → actual Telegram result → score update → existing text → next turn
+
+No unnecessary delays.
+
+Test multiple simultaneous games and multiple users, not just one game.
+
+3. OWNER INTERFACE PHOTOS
+
+You already found that the Telegram file_id persistence exists but is not fully connected to all renderers.
+
+Finish that integration.
+
+First trace every existing photo renderer and connect it to the persistent owner-selected photo configuration.
+
+Required:
+
+Owner Panel → Interface Photos → select interface → send photo → save persistent Telegram file_id → renderer uses that file_id.
+
+Interfaces:
+
+1. Menu
+2. Deposit
+3. Bonus
+4. Crypto Bonus
+5. Account/Profile
+
+The selected photos must survive:
+
+bot restart + VPS restart + redeploy/export.
+
+Do not make the owner edit code or upload files manually.
+
+IMPORTANT
+
+I don’t want another status report yet.
+
+Continue implementing, testing, debugging and fixing the remaining issues.
+
+After you finish, test the actual flows end-to-end and only then give me the final status.
+
+Do not mark something as complete unless it actually works.
+
+Most importantly:
+
+DO NOT BREAK ANY EXISTING WORKING FUNCTIONALITY.
