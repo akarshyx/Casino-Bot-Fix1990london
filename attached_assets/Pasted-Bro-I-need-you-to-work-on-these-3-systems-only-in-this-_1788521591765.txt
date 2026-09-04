@@ -1,0 +1,299 @@
+Bro, I need you to work on these 3 systems only, in this exact order. First inspect the existing codebase properly and understand how everything currently works. Do not rebuild or break anything that is already working.
+
+1. CRYPTO DEPOSIT SYSTEM — PRIORITY
+
+The NOWPayments address generation + QR generation is already working correctly. DO NOT CHANGE IT.
+
+NOWPayments should only be responsible for generating the deposit address and QR.
+
+The problem is everything after the address is generated.
+
+Required flow
+
+When a user selects a coin:
+
+User → selects coin → existing NOWPayments flow generates address + QR → bot permanently saves the relationship:
+
+USER → COIN → NETWORK → DEPOSIT ADDRESS → DEPOSIT RECORD
+
+The bot must then monitor the correct blockchain/network for that specific coin and address.
+
+When a transaction arrives:
+
+Blockchain detects transaction → identify exact address → identify exact user → identify exact coin/network → identify TXID + amount → send the Processing Payment message → monitor confirmations → confirm → credit the exact user’s balance → send Deposit Confirmation message.
+
+VERY IMPORTANT — PROCESSING & CONFIRMATION MESSAGES
+
+I have attached screenshots showing exactly how the Processing Payment and Deposit Confirmation messages should look.
+
+Use those screenshots as the source of truth.
+
+Do NOT invent, rewrite, redesign, or create different messages.
+
+Look carefully at the screenshots and reproduce the same:
+
+* wording
+* layout
+* spacing
+* custom/animated emojis
+* currency
+* amount
+* USD value
+* TXID
+* formatting
+
+The bot should send the exact same style of messages shown in my screenshots.
+
+Processing should be sent only once per transaction.
+
+Confirmation should be sent only once after the transaction is actually confirmed.
+
+Critical deposit bugs to fix
+
+There is currently a serious issue where a user selects one coin but sometimes the deposit gets credited as another coin.
+
+Fix the root cause.
+
+Never use a global/current coin variable for deposits.
+
+Every deposit must have its own persistent record containing the correct:
+
+* User ID
+* Coin
+* Network
+* Deposit address
+* Transaction ID/hash
+* Amount
+* Confirmation count
+* Status
+* USD value/rate
+* timestamps
+
+The transaction must be matched to the exact deposit address and exact deposit record.
+
+Confirmations
+
+Track confirmations for every pending transaction.
+
+Once the required confirmation level for that specific coin/network is reached, confirm the deposit and credit the balance.
+
+If a transaction is already sufficiently confirmed when detected, handle it immediately.
+
+Prevent duplicate credits
+
+The same transaction can be detected multiple times.
+
+Never credit it twice.
+
+Use persistent idempotency/unique transaction handling based on the transaction identity, network/coin and deposit address where appropriate.
+
+USD value
+
+There is also a problem where the USD value sometimes appears lower than the actual current market value.
+
+Fix the exchange-rate calculation so it always uses:
+
+correct coin + correct amount + reliable current market price
+
+Never use a stale price or the price of another coin.
+
+Reliability
+
+Deposits must survive:
+
+* bot restart
+* VPS restart
+* redeployment
+* temporary blockchain/API failures
+* network timeouts
+
+If the bot restarts while deposits are pending, it must automatically recover them from the database and continue monitoring.
+
+Multiple users can deposit at the same time. They must never interfere with each other.
+
+Add useful logs for deposit ID, user, coin, address, TXID, confirmations, status and errors, but never log private keys, seed phrases or secrets.
+
+⸻
+
+2. ANIMATED GAMES — COMPLETE RELIABILITY & SPEED FIX
+
+Games include Dice, Bowling, Darts, Soccer, Basketball, etc.
+
+The existing:
+
+* game text
+* score text
+* chance text
+* round text
+* buttons
+* scoring
+* final result text
+* turn messages
+* bot-roll messages
+
+are already good.
+
+DO NOT CHANGE THE EXISTING GAME WORDING, UI, scoring rules or gameplay design.
+
+Only fix the underlying animation, speed, async/state and reliability problems.
+
+Current problems
+
+Sometimes:
+
+* games randomly freeze
+* animation does not send
+* games become slow
+* rapid taps cause problems
+* “Don’t send rolls too fast, please wait for the bot to respond.” gets sent repeatedly
+* the same message gets stuck in a loop
+* duplicate rolls happen
+* duplicate tasks/messages happen
+* turns get stuck
+* rounds get stuck
+* game stops unexpectedly
+* stale async tasks affect the game
+* errors occur during normal gameplay
+
+Correct flow
+
+For example, with 2 rounds and 2 rolls:
+
+Bot turn → instantly send animation → receive actual Telegram result → calculate score → send existing bot-roll text → player turn
+
+Player:
+
+Instant animation → actual result → update score → existing text → next roll
+
+After both rolls:
+
+Existing Round score message → next round
+
+After final round:
+
+Existing final score message → game ends cleanly
+
+Everything should happen as quickly as Telegram allows.
+
+No unnecessary artificial delays or sleeps.
+
+Rapid taps
+
+If a player taps Roll multiple times while the current roll is processing:
+
+* Do not create multiple rolls.
+* Do not create multiple async tasks.
+* Do not repeatedly send warning messages.
+* Do not freeze the game.
+* Do not permanently lock the player.
+* Safely ignore/debounce duplicate taps.
+* Once the current roll finishes, the next valid roll must work immediately.
+
+Proper state handling
+
+Use one authoritative state machine such as:
+
+READY → ROLLING → RESULT RECEIVED → SCORE UPDATED → NEXT TURN
+
+Make sure old/stale tasks cannot modify a newer round or turn.
+
+Each game instance must be completely isolated from every other game.
+
+Clean up all timers, tasks, callbacks and listeners when the game finishes.
+
+If Telegram/API temporarily fails or times out, recover safely and return the game to a valid state instead of leaving it frozen.
+
+Never fake, modify or manually generate game results.
+
+Use the actual Telegram animation result.
+
+Final goal
+
+The game experience should be:
+
+INSTANT ANIMATION → INSTANT RESULT → INSTANT SCORE → EXISTING TEXT → NEXT TURN
+
+The games must not:
+
+* freeze
+* hang
+* loop
+* duplicate messages
+* duplicate rolls
+* skip turns
+* produce fake/wrong scores
+* corrupt state
+* crash during normal gameplay
+
+Properly test rapid tapping, multiple players, simultaneous games, slow Telegram responses, failures/timeouts, idle games, round transitions, final rounds and bot restart/reconnect.
+
+⸻
+
+3. OWNER PANEL — PERSISTENT INTERFACE PHOTOS
+
+I want an Owner Panel system that allows the owner to change the photos used in different bot interfaces.
+
+Before changing anything, search the entire codebase and understand where every existing photo is currently being used and how it is loaded.
+
+Find:
+
+* every existing interface photo
+* where the image is stored
+* whether it uses Telegram file_id, local files, URLs, database values, etc.
+* why photos disappear after export/redeploy/restart
+* whether an existing image system can be reused
+
+Required interfaces
+
+Add Owner Panel → Interface Photos
+
+With options for:
+
+1. Menu Interface
+2. Deposit Interface
+3. Bonus Interface
+4. Crypto Bonus Interface
+5. Account/Profile Interface
+
+Owner flow:
+
+Owner Panel → Interface Photos → select interface → owner sends photo → bot saves it → selected interface automatically uses the new photo.
+
+The owner should NOT need to:
+
+* edit code
+* manually upload files to the VPS
+* change environment variables
+* modify configuration files
+
+Persistence
+
+The selected photos must survive:
+
+Bot restart → VPS restart → export → redeploy → reinstall/re-upload
+
+Use the best persistent method compatible with the existing architecture. If Telegram file_id storage is suitable, use it and store the reference persistently in the database.
+
+When a new photo is selected, it should immediately become the photo used by that interface.
+
+If no custom photo exists, keep the current/default behavior.
+
+Do not change the existing interface text, buttons, layouts, menus, deposit logic, bonus logic or profile functionality.
+
+⸻
+
+FINAL INSTRUCTION
+
+Work on these in this exact priority:
+
+1️⃣ Deposits
+2️⃣ Animated Games
+3️⃣ Interface Photos
+
+Before modifying anything, inspect the existing codebase thoroughly.
+
+Fix the root causes, not temporary symptoms.
+
+Do not unnecessarily rewrite working systems.
+
+After implementation, test all three systems thoroughly and make sure there are no obvious race conditions, duplicate processing, freezes, broken states or restart/persistence problems.
