@@ -1,0 +1,171 @@
+Bro, I need you to fully debug and stabilize the animated games and crypto deposit tracking, but DO NOT change anything that is already working.
+
+1. ANIMATED GAMES — FULL RELIABILITY FIX
+
+Games: Dice, Bowling, Darts, Soccer, Basketball, etc.
+
+The existing game text, score text, chance text, round text, final-score text, buttons, and game rules are GOOD. DO NOT CHANGE THEM.
+
+I only want the emoji sending, roll handling, message timing, async state management, and reliability fixed.
+
+The games currently sometimes:
+
+* randomly freeze even when nobody is rolling
+* get stuck after a roll
+* become slow/laggy
+* fail to send the animation
+* repeat the same text/message again and again
+* get stuck when players roll quickly
+* show “don’t send rolls too fast” and then remain stuck
+* sometimes fail to advance the turn/round
+* sometimes create duplicate messages/tasks
+* sometimes throw errors during a game
+
+I want this completely debugged, not patched temporarily.
+
+EXACT EXPERIENCE I WANT
+
+Example: player starts a game and chooses 2 rounds / 2 rolls with the bot rolling first.
+
+Round 1:
+
+Bot turn → emoji/roll is sent immediately and reliably → result is received → bot immediately sends the existing bot-roll text already in the game → player gets their turn.
+
+Player rolls → emoji is sent immediately → result is received → existing score/game text is sent immediately.
+
+Player rolls their second chance → same process.
+
+Then the bot immediately sends the existing Round 1 score text.
+
+Round 2 starts immediately and repeats the same flow.
+
+After Round 2, the bot sends the existing final score text.
+
+DO NOT create new wording. Use the existing texts already in the code.
+
+The only thing I want changed is how fast and reliably the emoji + existing text are sent and how the game state is handled.
+
+ABSOLUTE REQUIREMENT
+
+A player rapidly tapping Roll must NEVER be able to break the game.
+
+Do not repeatedly send a “please wait” warning.
+
+Safely ignore/debounce extra taps while a roll is actually processing, then immediately allow the next valid roll when it finishes.
+
+The game must NEVER:
+
+freeze
+hang
+randomly stop
+get stuck in ROLLING
+get stuck in WAITING
+loop forever
+repeat messages
+duplicate rolls
+skip an emoji
+skip a legitimate turn
+send a fake score
+send a wrong score
+lose a round
+crash with an error
+
+Even if nobody is rolling, the game must not randomly become stuck.
+
+Use proper async task management, cancellation, locks/state validation, and idempotent callbacks.
+
+There must be only one authoritative game state and one active action per turn. Old/stale async tasks must never modify a newer turn or round.
+
+If Telegram/API temporarily fails, handle it safely and recover without corrupting the game state.
+
+Never fake a result. Never manipulate a result. Never skip a legitimate result.
+
+The actual Telegram animation result must be used for the score.
+
+When a game ends, clean up all timers/tasks/listeners belonging to that game so they cannot continue sending messages afterward.
+
+When multiple games are running simultaneously, they must remain completely isolated from each other.
+
+TEST THIS HARD
+
+Before considering it finished, test:
+
+* rapid repeated taps
+* multiple players tapping simultaneously
+* slow Telegram responses
+* temporary API errors
+* failed animation sends
+* bot/API timeouts
+* player leaving
+* round transitions
+* final round
+* multiple games at once
+* long-running games
+* bot restart/reconnect
+* random idle periods where nobody is rolling
+
+The goal is zero gameplay errors and zero stuck states.
+
+If something fails internally, recover cleanly instead of leaving the player frozen or repeatedly sending the same message.
+
+2. CRYPTO DEPOSIT TRACKING
+
+The existing NOWPayments address and QR generation is already working. DO NOT CHANGE IT.
+
+After an address is generated, the system must permanently remember:
+
+USER → PAYMENT → COIN/NETWORK → ADDRESS → TRANSACTION → BALANCE
+
+Every generated address must remain correctly linked to the exact user who received it.
+
+When crypto arrives at that address:
+
+Detect transaction → identify correct user/address/coin → send processing notification → track confirmations → confirm → credit correct user’s balance → send confirmation notification.
+
+Processing example:
+
+5386367538735104399 = custom animated emoji ID
+
+Processing payment Of 0.3572 GRAM.
+
+Confirmation example:
+
+6305056190036451310 = custom animated emoji ID
+
+Deposit confirmed
+
+6235568867637207626 = custom animated emoji ID
+
+Currency: GRAM
+
+Amount: 0.35
+
+6305518521791028899 = custom animated emoji ID
+
+IN USD: $0.54
+
+6305442397790674704 = custom animated emoji ID
+
+Txid: 0xdb949e038ea4780bc42897181216040fad445d2df2be9682c8a093d5a4890693
+
+These numbers are custom Telegram animated emoji IDs. Render them as the configured custom emojis, not as visible numbers.
+
+The bot must NEVER confuse one user’s address with another user’s address.
+
+It must handle many deposits simultaneously, survive restarts, track confirmations, and never double-credit the same TXID.
+
+Use persistent database state and proper idempotency/race-condition protection.
+
+FINAL GOAL
+
+Do not redesign anything.
+
+Keep all existing game/deposit text and working functionality exactly as it is.
+
+Fix the underlying execution so:
+
+ANIMATED GAMES = instant, smooth, fair, reliable, zero freezes, zero loops, zero duplicate messages, zero skipped animations, zero fake results, zero gameplay errors.
+
+DEPOSITS = correctly tracked to the right user, automatically detected, confirmed, credited, notified, restart-safe, and duplicate-safe.
+
+Please inspect the actual code first, find the root causes, and properly test the fixes. I need this implemented robustly so I don’t have to repeatedly come back and fix the same bugs.

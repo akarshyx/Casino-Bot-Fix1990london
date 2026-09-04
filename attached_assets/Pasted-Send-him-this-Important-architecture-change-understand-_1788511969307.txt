@@ -1,0 +1,71 @@
+Send him this:
+
+Important architecture change — understand this clearly:
+
+NOWPayments should ONLY be used for generating the deposit address and QR code.
+
+The bot must NOT depend on NOWPayments IPN, NOWPayments transaction API, or NOWPayments payment status to detect or confirm deposits.
+
+After NOWPayments returns the deposit address, our own bot takes over.
+
+Required functions
+
+1. create_deposit_session()
+
+* Call existing NOWPayments code only to generate/get the address + QR.
+* Save user_id, coin, network, deposit_address, created_at, and expires_at (1 hour).
+
+2. start_deposit_watcher()
+
+* Start a background watcher for every active deposit session.
+* It must monitor the blockchain directly, independently of NOWPayments.
+
+3. check_address_transactions(address, coin, network)
+
+* Query the appropriate blockchain RPC/node or reliable blockchain explorer API.
+* Check whether an incoming transaction has been received by that exact address.
+* Return the transaction hash, amount, destination address and confirmation status.
+
+4. process_detected_deposit()
+
+* Verify the transaction belongs to the saved deposit address.
+* Verify correct coin/token + network.
+* Verify transaction succeeded and has the required confirmations.
+* Check the TX hash has never been credited before.
+
+5. credit_deposit_once()
+
+* Atomically credit the user’s casino balance.
+* Record the TX hash in the database.
+* Make duplicate credit impossible.
+
+6. send_deposit_notifications()
+
+* When the payment is detected, send the existing Transaction Processing message.
+* After confirmation + successful balance credit, send the existing Deposit Confirmed message with the correct amount and coin.
+
+The complete flow must be:
+
+NOWPayments → generate address + QR ONLY
+
+Blockchain → detect payment
+
+Bot watcher → detect incoming TX
+
+Bot → Transaction Processing message
+
+Blockchain → required confirmations
+
+Bot → verify TX
+
+Bot → credit user’s balance
+
+Bot → update database
+
+Bot → Deposit Confirmed message
+
+NOWPayments must NOT be involved after the address/QR is generated.
+
+First inspect the existing code and identify the correct blockchain/RPC/API for each coin currently supported by the casino. Do not invent a generic function that cannot actually detect transactions for the supported coins. Then connect the watcher to the existing deposit sessions and test the complete detection → confirmation → credit flow.
+
+One key point: the exact check_address_transactions() implementation depends on which coins/networks your casino supports. BTC, LTC, DOGE, SOL, ETH/ERC-20, TRON/TRC-20, etc. all require different blockchain data sources. The agent should inspect your existing coin configuration and implement the correct detector for each one.
